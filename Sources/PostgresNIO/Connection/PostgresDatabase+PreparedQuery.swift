@@ -23,6 +23,43 @@ extension PostgresDatabase {
             }
         }
     }
+    #if canImport(_Concurrency)
+    public func prepare(query: String) async throws -> PreparedQuery {
+        let future: EventLoopFuture<PreparedQuery> = prepare(query: query)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+
+    public func prepare(query: String, handler: @escaping (PreparedQuery) async throws -> [[PostgresRow]]
+    ) async throws -> [[PostgresRow]] {
+        let fun: (PreparedQuery) -> EventLoopFuture<[[PostgresRow]]> = { conn in
+            let promise: EventLoopPromise<[[PostgresRow]]> = eventLoop.any().makePromise()
+            Task {
+                do {
+                    promise.succeed(try await handler(conn))
+                } catch {
+                    promise.fail(error)
+                }
+            }
+            return promise.futureResult
+        }
+        let future: EventLoopFuture<[[PostgresRow]]> = prepare(query: query, handler: fun)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+    #endif
 }
 
 
@@ -48,6 +85,24 @@ public struct PreparedQuery {
     public func deallocate() -> EventLoopFuture<Void> {
         self.underlying.connection.close(.preparedStatement(self.underlying.name), logger: self.database.logger)
     }
+    
+    #if canImport(_Concurrency)
+    public func execute(_ binds: [PostgresData] = []) async throws -> [PostgresRow] {
+        var rows: [PostgresRow] = []
+        try await self.execute(binds) { rows.append($0) }
+        return rows
+    }
+
+    public func execute(_ binds: [PostgresData] = [], _ onRow: @escaping (PostgresRow) throws -> Void
+    ) async throws {
+        let command = PostgresCommands.executePreparedStatement(query: self, binds: binds, onRow: onRow)
+        return try await self.database.send(command, logger: self.database.logger)
+    }
+
+    public func deallocate() async throws {
+        try await self.underlying.connection.close(.preparedStatement(self.underlying.name), logger: self.database.logger)
+    }
+    #endif
 }
 
 final class PrepareQueryRequest {

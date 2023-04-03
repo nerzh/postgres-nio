@@ -127,6 +127,18 @@ public final class PostgresConnection {
     public var closeFuture: EventLoopFuture<Void> {
         return self.channel.closeFuture
     }
+    
+    public func closeFutureAsync() async throws {
+        let future = self.channel.closeFuture
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
 
     /// A logger to use in case
     public var logger: Logger {
@@ -374,6 +386,20 @@ public final class PostgresConnection {
         self.channel.close(mode: .all, promise: nil)
         return self.closeFuture
     }
+    
+    #if canImport(_Concurrency)
+    func close(_ target: CloseTarget, logger: Logger) async throws {
+        let future: EventLoopFuture<Void> = close(target, logger: logger)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+    #endif
 }
 
 // MARK: Connect
@@ -625,9 +651,47 @@ extension PostgresConnection: PostgresDatabase {
         }
     }
 
-    public func withConnection<T>(_ closure: (PostgresConnection) -> EventLoopFuture<T>) -> EventLoopFuture<T> {
+    public func withConnection<T>(_ closure: @escaping (PostgresConnection) -> EventLoopFuture<T>) -> EventLoopFuture<T> {
         closure(self)
     }
+    
+    #if canImport(_Concurrency)
+    public func send(_ request: PostgresRequest, logger: Logging.Logger) async throws {
+        let future: EventLoopFuture<Void> = send(request, logger: logger)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+
+    public func withConnection<T>(_ closure: @escaping (PostgresConnection) async throws -> T
+    ) async throws -> T {
+        let fun: (PostgresConnection) -> EventLoopFuture<T> = { conn in
+            let promise: EventLoopPromise<T> = self.eventLoop.any().makePromise()
+            Task {
+                do {
+                    promise.succeed(try await closure(conn))
+                } catch {
+                    promise.fail(error)
+                }
+            }
+            return promise.futureResult
+        }
+        let future: EventLoopFuture<T> = withConnection(fun)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+    #endif
 }
 
 internal enum PostgresCommands: PostgresRequest {

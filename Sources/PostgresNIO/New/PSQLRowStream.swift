@@ -164,6 +164,19 @@ final class PSQLRowStream {
         }
     }
     
+    #if canImport(_Concurrency)
+    func all() async throws -> [PostgresRow] {
+        let future: EventLoopFuture<[PostgresRow]> = all()
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+    #endif
     private func all0() -> EventLoopFuture<[PostgresRow]> {
         self.eventLoop.preconditionInEventLoop()
         
@@ -207,6 +220,19 @@ final class PSQLRowStream {
             }
         }
     }
+    #if canImport(_Concurrency)
+    func onRow(_ onRow: @escaping (PostgresRow) throws -> ()) async throws {
+        let future: EventLoopFuture<Void> = self.onRow(onRow)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+    #endif
     
     private func onRow0(_ onRow: @escaping (PostgresRow) throws -> ()) -> EventLoopFuture<Void> {
         self.eventLoop.preconditionInEventLoop()

@@ -32,6 +32,42 @@ extension PostgresDatabase {
     }
 }
 
+#if canImport(_Concurrency)
+extension PostgresDatabase {
+    public func query(
+        _ string: String,
+        _ binds: [PostgresData] = []
+    ) async throws -> PostgresQueryResult {
+        let future: EventLoopFuture<PostgresQueryResult> = query(string, binds)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+
+    public func query(
+        _ string: String,
+        _ binds: [PostgresData] = [],
+        onMetadata: @escaping (PostgresQueryMetadata) -> () = { _ in },
+        onRow: @escaping (PostgresRow) throws -> ()
+    ) async throws {
+        let future: EventLoopFuture<Void> = query(string, binds, onMetadata: onMetadata, onRow: onRow)
+        return try await withCheckedThrowingContinuation { cont in
+            future.whenSuccess { val in
+                cont.resume(returning: val)
+            }
+            future.whenFailure { error in
+                cont.resume(throwing: error)
+            }
+        }
+    }
+}
+#endif
+
 public struct PostgresQueryResult {
     public let metadata: PostgresQueryMetadata
     public let rows: [PostgresRow]
